@@ -1,0 +1,19 @@
+{
+  "name": "blueprintai",
+  "private": true,
+  "version": "0.0.1",
+  "description": "BluePrintAI — AI-driven floor plan + BOQ tool for Indian architects/civil engineers",
+  "scripts": {
+    "dev": "pnpm --filter @blueprintai/web dev",
+    "build": "pnpm --filter @blueprintai/web build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @blueprintai/web test",
+    "test:unit": "pnpm --filter @blueprintai/web test:unit",
+    "test:e2e": "pnpm --filter @blueprintai/web test:e2e"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.2"
+}
