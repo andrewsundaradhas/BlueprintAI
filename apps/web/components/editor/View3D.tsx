@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Sky, Environment, Grid } from "@react-three/drei";
 import * as THREE from "three";
 import type { SolvedPlan, SolvedRoom } from "@/lib/solver/solver";
@@ -22,9 +22,14 @@ function roomColor(name: string): string {
   return "#d6d3d1";
 }
 
+type CameraMode = "orbit" | "walk";
+
 export function View3D() {
   const floor = useEditor(selectActiveFloor);
   const accent = "#2D7FF9";
+  const [cameraMode, setCameraMode] = React.useState<CameraMode>("orbit");
+  const [showRoof, setShowRoof] = React.useState(false);
+
   if (!floor?.plan) {
     return (
       <div className="w-full h-full grid place-items-center text-tertiary text-sm">
@@ -50,16 +55,50 @@ export function View3D() {
         }}
         gl={{ antialias: true }}
       >
-        <Scene plan={plan} accent={accent} />
+        <Scene plan={plan} accent={accent} cameraMode={cameraMode} showRoof={showRoof} />
       </Canvas>
-      <div className="absolute top-3 left-3 mono text-xs text-tertiary bg-surface-1 border border-border-subtle px-2 py-1 rounded-sm">
-        Drag to orbit · Scroll to zoom · Right-click to pan
+
+      {/* 3D toolbar — top-right, floating */}
+      <div className="absolute top-3 right-3 surface-2 border border-border-default rounded shadow-md p-1 flex items-center gap-1 pointer-events-auto">
+        <button
+          onClick={() => setCameraMode("orbit")}
+          data-active={cameraMode === "orbit" ? "true" : undefined}
+          className="px-3 h-7 text-xs rounded-sm text-secondary hover:text-primary data-[active=true]:bg-[var(--accent-soft)] data-[active=true]:text-accent"
+        >Orbit</button>
+        <button
+          onClick={() => setCameraMode("walk")}
+          data-active={cameraMode === "walk" ? "true" : undefined}
+          className="px-3 h-7 text-xs rounded-sm text-secondary hover:text-primary data-[active=true]:bg-[var(--accent-soft)] data-[active=true]:text-accent"
+        >Walk</button>
+        <div className="w-px h-4 bg-border-subtle mx-1" />
+        <button
+          onClick={() => setShowRoof((b) => !b)}
+          data-active={showRoof ? "true" : undefined}
+          className="px-3 h-7 text-xs rounded-sm text-secondary hover:text-primary data-[active=true]:bg-[var(--accent-soft)] data-[active=true]:text-accent"
+        >Roof</button>
+      </div>
+
+      {/* Hint */}
+      <div className="absolute top-3 left-3 mono text-xs text-tertiary surface-1 border border-border-subtle px-2 py-1 rounded-sm">
+        {cameraMode === "orbit"
+          ? "Drag to orbit · Scroll to zoom · Right-click to pan"
+          : "Click to enter · WASD to move · Esc to exit"}
       </div>
     </div>
   );
 }
 
-function Scene({ plan, accent }: { plan: SolvedPlan; accent: string }) {
+function Scene({
+  plan,
+  accent,
+  cameraMode,
+  showRoof,
+}: {
+  plan: SolvedPlan;
+  accent: string;
+  cameraMode: CameraMode;
+  showRoof: boolean;
+}) {
   const W = plan.plot.w * MM_TO_M;
   const H = plan.plot.h * MM_TO_M;
   const cx = W / 2;
@@ -130,16 +169,159 @@ function Scene({ plan, accent }: { plan: SolvedPlan; accent: string }) {
       {/* Interior walls — derived from shared edges between rooms */}
       <InteriorWalls plan={plan} />
 
-      <OrbitControls
-        target={[cx, 1.2, cz]}
-        enableDamping
-        dampingFactor={0.07}
-        minDistance={3}
-        maxDistance={Math.max(W, H) * 4}
-        maxPolarAngle={Math.PI / 2 - 0.05}
-      />
+      {/* Roof slab (toggleable) */}
+      {showRoof && (
+        <mesh receiveShadow castShadow position={[cx, HEIGHT_M + 0.075, cz]}>
+          <boxGeometry args={[W + 0.46, 0.15, H + 0.46]} />
+          <meshStandardMaterial color="#a8a29e" roughness={0.9} />
+        </mesh>
+      )}
+
+      {cameraMode === "orbit" ? (
+        <OrbitControls
+          target={[cx, 1.2, cz]}
+          enableDamping
+          dampingFactor={0.07}
+          minDistance={3}
+          maxDistance={Math.max(W, H) * 4}
+          maxPolarAngle={Math.PI / 2 - 0.05}
+        />
+      ) : (
+        <WalkControls plan={plan} />
+      )}
     </>
   );
+}
+
+// ────────── Walk-through camera (custom PointerLock + WASD + collision) ──────────
+//
+// Replaces drei's PointerLockControls because that one attaches a global
+// click handler that fires `requestPointerLock()` on a possibly-unmounted
+// element (WrongDocumentError when toggling Walk → Orbit, or Split → 3D).
+// Our version locks to the canvas's own gl.domElement and tears down all
+// listeners on unmount so toggles are safe.
+
+function WalkControls({ plan }: { plan: SolvedPlan }) {
+  const { camera, gl } = useThree();
+  const lockedRef = React.useRef(false);
+  const keys = React.useRef({ w: false, a: false, s: false, d: false, shift: false });
+
+  // Place the eye at the centre of the plot, 1.7m up, looking forward.
+  React.useEffect(() => {
+    const W = plan.plot.w * MM_TO_M;
+    const H = plan.plot.h * MM_TO_M;
+    camera.position.set(W * 0.5, 1.7, H * 0.5);
+    camera.lookAt(W * 0.5, 1.7, H * 0.5 + 1);
+  }, [camera, plan.plot.w, plan.plot.h]);
+
+  React.useEffect(() => {
+    const el = gl.domElement;
+    if (!el) return;
+    let mounted = true;
+
+    const onClick = () => {
+      if (!mounted) return;
+      if (typeof document === "undefined") return;
+      if (document.pointerLockElement === el) return;
+      // Guard against the canvas being detached (e.g. Split→3D toggled
+      // mid-click) before requesting the lock — that's the WrongDocumentError.
+      if (!document.contains(el)) return;
+      try {
+        // Some browsers return a Promise; ignore it.
+        const ret = el.requestPointerLock() as unknown as Promise<void> | undefined;
+        if (ret && typeof ret.catch === "function") ret.catch(() => {});
+      } catch {
+        // Older browsers throw synchronously — silently ignore.
+      }
+    };
+
+    const onLockChange = () => {
+      lockedRef.current = document.pointerLockElement === el;
+    };
+
+    const onMouseMove = (e: MouseEvent) => {
+      if (!lockedRef.current) return;
+      const SENS = 0.0025;
+      const euler = new THREE.Euler(0, 0, 0, "YXZ");
+      euler.setFromQuaternion(camera.quaternion);
+      euler.y -= e.movementX * SENS;
+      euler.x -= e.movementY * SENS;
+      const PI_2 = Math.PI / 2 - 0.01;
+      euler.x = Math.max(-PI_2, Math.min(PI_2, euler.x));
+      camera.quaternion.setFromEuler(euler);
+    };
+
+    const dn = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (k === "w" || k === "arrowup")    keys.current.w = true;
+      if (k === "s" || k === "arrowdown")  keys.current.s = true;
+      if (k === "a" || k === "arrowleft")  keys.current.a = true;
+      if (k === "d" || k === "arrowright") keys.current.d = true;
+      if (k === "shift") keys.current.shift = true;
+      if (e.key === "Escape" && lockedRef.current) {
+        try { document.exitPointerLock?.(); } catch {}
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      if (k === "w" || k === "arrowup")    keys.current.w = false;
+      if (k === "s" || k === "arrowdown")  keys.current.s = false;
+      if (k === "a" || k === "arrowleft")  keys.current.a = false;
+      if (k === "d" || k === "arrowright") keys.current.d = false;
+      if (k === "shift") keys.current.shift = false;
+    };
+
+    el.addEventListener("click", onClick);
+    document.addEventListener("pointerlockchange", onLockChange);
+    document.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("keydown", dn);
+    window.addEventListener("keyup", up);
+
+    return () => {
+      mounted = false;
+      el.removeEventListener("click", onClick);
+      document.removeEventListener("pointerlockchange", onLockChange);
+      document.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("keydown", dn);
+      window.removeEventListener("keyup", up);
+      // Always release the lock if we still hold it.
+      if (typeof document !== "undefined" && document.pointerLockElement === el) {
+        try { document.exitPointerLock?.(); } catch {}
+      }
+      lockedRef.current = false;
+    };
+  }, [gl, camera]);
+
+  // Movement + naive AABB collision against perimeter
+  useFrame((_state, dt) => {
+    if (!lockedRef.current) return;
+    const speed = (keys.current.shift ? 3.0 : 1.4) * Math.min(0.05, dt);
+
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    dir.y = 0;
+    dir.normalize();
+    const right = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
+
+    const move = new THREE.Vector3();
+    if (keys.current.w) move.add(dir);
+    if (keys.current.s) move.sub(dir);
+    if (keys.current.d) move.add(right);
+    if (keys.current.a) move.sub(right);
+    if (move.lengthSq() === 0) return;
+    move.normalize().multiplyScalar(speed);
+
+    const W = plan.plot.w * MM_TO_M;
+    const H = plan.plot.h * MM_TO_M;
+    const margin = TE_M + 0.2;
+    const next = camera.position.clone().add(move);
+    next.x = Math.max(margin, Math.min(W - margin, next.x));
+    next.z = Math.max(margin, Math.min(H - margin, next.z));
+    next.y = 1.7;
+    camera.position.copy(next);
+  });
+
+  return null;
 }
 
 function RoomFloor({ room, accent }: { room: SolvedRoom; accent: string }) {

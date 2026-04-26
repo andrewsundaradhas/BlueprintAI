@@ -126,6 +126,11 @@ export function FloorPlanSVG({
         <OpeningGlyph key={op.id} op={op} T={T} />
       ))}
 
+      {/* Fixtures — drawn inside each room */}
+      {rooms.map((r) => (
+        <RoomFixtures key={`fx-${r.id}`} room={r} T={T} />
+      ))}
+
       {/* Room labels — auto-sized with optional 2-line wrap */}
       {rooms.map((r) => {
         const [x, y] = T(r.x, r.y);
@@ -222,6 +227,155 @@ export function FloorPlanSVG({
         );
       })()}
     </svg>
+  );
+}
+
+// ────────── Fixtures (per-room furniture rendered in SVG) ──────────
+
+type FixturePrimitive =
+  | { kind: "rect"; x: number; y: number; w: number; h: number; label?: string; rounded?: boolean; fill?: string }
+  | { kind: "circle"; cx: number; cy: number; r: number; label?: string; fill?: string };
+
+function fixturesFor(name: string, w: number, h: number): FixturePrimitive[] {
+  const n = name.toLowerCase();
+  const out: FixturePrimitive[] = [];
+
+  // Bathroom / Toilet
+  if (/(bath|toilet|wc|powder)/.test(n)) {
+    // WC against bottom wall
+    out.push({ kind: "rect", x: 100, y: h - 600, w: 500, h: 500, label: "WC", rounded: true });
+    // Washbasin against top wall
+    out.push({ kind: "rect", x: w - 700, y: 100, w: 600, h: 400, label: "WB", rounded: true });
+    // Shower square in opposite corner (only if bath, not powder)
+    if (!/powder/.test(n) && w > 1500 && h > 1500) {
+      out.push({ kind: "rect", x: w - 900, y: h - 900, w: 800, h: 800, label: "SH", fill: "rgba(120,140,170,0.15)" });
+    }
+    return out;
+  }
+
+  // Kitchen
+  if (/kitchen/.test(n)) {
+    // L-shaped counter along top + left
+    out.push({ kind: "rect", x: 100, y: 100, w: w - 200, h: 600, label: "" });
+    if (h > 2200) out.push({ kind: "rect", x: 100, y: 700, w: 600, h: h - 800, label: "" });
+    out.push({ kind: "rect", x: 200, y: 250, w: 700, h: 300, label: "Stove", fill: "rgba(15,15,20,0.45)" });
+    out.push({ kind: "rect", x: w - 1000, y: 250, w: 700, h: 300, label: "Sink", fill: "rgba(80,100,140,0.30)" });
+    if (h > 2500) out.push({ kind: "rect", x: w - 800, y: h - 700, w: 600, h: 600, label: "Fridge", fill: "rgba(220,220,225,0.20)" });
+    return out;
+  }
+  if (/kitchenette/.test(n)) {
+    out.push({ kind: "rect", x: 100, y: 100, w: w - 200, h: 600, label: "" });
+    out.push({ kind: "rect", x: 200, y: 250, w: 600, h: 300, label: "Stove", fill: "rgba(15,15,20,0.45)" });
+    return out;
+  }
+
+  // Master / Bedroom
+  if (/master/.test(n)) {
+    const bedW = Math.min(1800, w - 800);
+    const bedH = Math.min(2000, h - 800);
+    out.push({ kind: "rect", x: (w - bedW) / 2, y: 400, w: bedW, h: bedH, label: "King", rounded: true });
+    if (w > 3000) out.push({ kind: "rect", x: 100, y: h - 700, w: 1800, h: 600, label: "Wardrobe", fill: "rgba(110,80,55,0.25)" });
+    return out;
+  }
+  if (/bedroom|\bbr ?\d|guest/.test(n) && !/master/.test(n)) {
+    const bedW = Math.min(1500, w - 800);
+    const bedH = Math.min(2000, h - 800);
+    out.push({ kind: "rect", x: (w - bedW) / 2, y: 400, w: bedW, h: bedH, label: "Bed", rounded: true });
+    if (w > 2800) out.push({ kind: "rect", x: 100, y: h - 700, w: 1500, h: 600, label: "Wardrobe", fill: "rgba(110,80,55,0.25)" });
+    return out;
+  }
+
+  // Studio
+  if (/studio/.test(n)) {
+    const bedW = Math.min(1500, w - 1500);
+    out.push({ kind: "rect", x: 200, y: 200, w: bedW, h: 2000, label: "Bed", rounded: true });
+    out.push({ kind: "rect", x: w - 2300, y: h - 1000, w: 2100, h: 800, label: "Sofa", rounded: true, fill: "rgba(120,40,40,0.30)" });
+    return out;
+  }
+
+  // Living / Dining
+  if (/living|dining|hall|lounge/.test(n)) {
+    // Sofa along longer side
+    const horizontal = w >= h;
+    if (horizontal) {
+      out.push({ kind: "rect", x: 400, y: h - 1100, w: 2100, h: 900, label: "Sofa", rounded: true, fill: "rgba(120,40,40,0.30)" });
+      out.push({ kind: "rect", x: w - 1700, y: 200, w: 1500, h: 400, label: "TV unit", fill: "rgba(15,15,20,0.45)" });
+      if (w > 5000) {
+        out.push({ kind: "rect", x: w - 2400, y: h - 1500, w: 1800, h: 1000, label: "Dining", rounded: true, fill: "rgba(110,80,55,0.30)" });
+      }
+    } else {
+      out.push({ kind: "rect", x: 200, y: 400, w: 900, h: 2100, label: "Sofa", rounded: true, fill: "rgba(120,40,40,0.30)" });
+      out.push({ kind: "rect", x: w - 600, y: 400, w: 400, h: 1500, label: "TV", fill: "rgba(15,15,20,0.45)" });
+    }
+    return out;
+  }
+
+  // Puja
+  if (/(puja|pooja|prayer|mandir)/.test(n)) {
+    out.push({ kind: "rect", x: w / 2 - 400, y: h - 800, w: 800, h: 600, label: "Mandir", fill: "rgba(250,200,80,0.25)" });
+    return out;
+  }
+
+  // Study / Home Office
+  if (/study|office|workspace/.test(n)) {
+    out.push({ kind: "rect", x: 200, y: 200, w: 1200, h: 600, label: "Desk", fill: "rgba(110,80,55,0.30)" });
+    if (h > 2200) out.push({ kind: "rect", x: 200, y: h - 700, w: 1500, h: 400, label: "Bookshelf", fill: "rgba(110,80,55,0.20)" });
+    return out;
+  }
+
+  // Utility / Store
+  if (/utility/.test(n)) {
+    out.push({ kind: "rect", x: 200, y: 200, w: 800, h: 700, label: "Washer", fill: "rgba(220,220,225,0.20)" });
+    if (h > 2000) out.push({ kind: "rect", x: w - 1000, y: 200, w: 800, h: 700, label: "Dryer", fill: "rgba(220,220,225,0.20)" });
+    return out;
+  }
+  if (/store/.test(n)) {
+    out.push({ kind: "rect", x: 100, y: 100, w: 600, h: h - 200, label: "Shelves", fill: "rgba(110,80,55,0.25)" });
+    return out;
+  }
+
+  // Balcony — nothing
+  return out;
+}
+
+function RoomFixtures({ room, T }: { room: SolvedRoom; T: (x: number, y: number) => readonly [number, number] }) {
+  const items = fixturesFor(room.name, room.w, room.h);
+  if (!items.length) return null;
+  const [ox, oy] = T(room.x, room.y);
+  // Cap label size: read at any zoom, but not overwhelming on small fixtures
+  return (
+    <g transform={`translate(${ox} ${oy})`} pointerEvents="none">
+      {items.map((it, i) => {
+        if (it.kind === "rect") {
+          return (
+            <g key={i}>
+              <rect
+                x={it.x} y={it.y}
+                width={it.w} height={it.h}
+                fill={it.fill ?? "rgba(120,140,170,0.10)"}
+                stroke="rgb(var(--canvas-wall))"
+                strokeOpacity="0.55"
+                strokeWidth="20"
+                rx={it.rounded ? 60 : 0}
+              />
+              {it.label && it.w > 500 && it.h > 350 && (
+                <text
+                  x={it.x + it.w / 2}
+                  y={it.y + it.h / 2 + 50}
+                  fill="rgba(255,255,255,0.55)"
+                  fontFamily="var(--font-mono)"
+                  fontSize={Math.min(180, it.h / 2.4)}
+                  textAnchor="middle"
+                >
+                  {it.label.toUpperCase()}
+                </text>
+              )}
+            </g>
+          );
+        }
+        return null;
+      })}
+    </g>
   );
 }
 

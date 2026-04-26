@@ -172,10 +172,11 @@ export function Dock() {
         <Sep />
         <Segmented
           value={view}
-          onChange={(v) => setView(v as "2D" | "3D")}
+          onChange={(v) => setView(v as "2D" | "3D" | "Split")}
           options={[
-            { value: "2D", label: "2D" },
-            { value: "3D", label: "3D" },
+            { value: "2D",    label: "2D" },
+            { value: "Split", label: "Split" },
+            { value: "3D",    label: "3D" },
           ]}
         />
       </div>
