@@ -1,306 +1,255 @@
-import { type PlanIR } from "@/lib/schema/plan";
+import { type PlanSpec, SEED_SPEC, type Zone } from "@/lib/solver/solver";
 
 /**
- * Procedural fallback used when no LLM API key is configured. Produces a
- * valid 2BHK or 3BHK shaped to the requested plot, so the editor and BOQ
- * engine work end-to-end in demo mode.
+ * Heuristic prompt parser — used when no LLM API key is configured.
  *
- * Layout (Y-down, clockwise polygons):
+ * Parses the user's prompt for:
+ *   • BHK count or "studio"
+ *   • Plot dimensions ("8x11m", "30x40 ft", "1200 sqft")
+ *   • Facing direction ("north-facing", "east entry")
+ *   • Budget ("₹24L", "35 lakh", "Rs 50L")
+ *   • Special rooms (puja, study, store, balcony, utility, servant, garage)
+ *   • Size qualifier (compact / spacious / luxury)
  *
- *   ┌─────────┬─────┬───────────┐
- *   │ Master  │ Bed2│ Bed3*     │  ← splitY (* only when isLarge)
- *   ├─────────┴─────┴───┬───────┤
- *   │                   │ Bath  │
- *   │   Living/Dining   ├───────┤
- *   │                   │       │
- *   ├──────┐            │       │
- *   │ Kitchen           │       │
- *   └──────┴────────────┴───────┘
+ * Produces a PlanSpec the solver can pack. Quality is below an LLM but
+ * good enough that the editor + BOQ work end-to-end without API keys.
  */
-export function buildDemoPlan(args: {
-  prompt: string;
-  meta: PlanIR["meta"];
-}): PlanIR {
-  const { plot_width_mm: pw, plot_depth_mm: pd } = args.meta;
-  const setback = 900;
-  const ix = setback;             // inner left
-  const iy = setback;             // inner top
-  const iw = pw - 2 * setback;    // inner width
-  const ih = pd - 2 * setback;    // inner height
+export function buildDemoSpec(args: { prompt: string }): PlanSpec {
+  const p = args.prompt;
+  const bhk = parseBhk(p);
+  const plot = parsePlot(p, bhk);
+  const facing = parseFacing(p);
+  const budget = parseBudget(p);
+  const qualifier = parseQualifier(p); // 0.85 / 1 / 1.2
+  const extras = parseSpecialRooms(p);
 
-  const isLarge = (iw / 1000) * (ih / 1000) >= 90 ||
-    /3\s*bhk|three.bedroom|3-bhk/i.test(args.prompt);
+  const rooms = composeRooms(bhk, qualifier, extras);
 
-  // Splits
-  const splitY     = iy + Math.round(ih * 0.5);
-  const bedSplitX  = ix + Math.round(iw * (isLarge ? 0.45 : 0.5));
-  const bath1X     = ix + Math.round(iw * 0.65);  // bedroom 2/3 split (isLarge)
-
-  // Bathroom (top-right of bottom half) — 1.8m × 2.4m
-  const bathW = 1800;
-  const bathH = 2400;
-  const bathX0 = ix + iw - bathW;       // bathroom left
-  const bathY0 = splitY;                // bathroom top
-  const bathY1 = bathY0 + bathH;        // bathroom bottom
-
-  // Kitchen (bottom-left of bottom half) — 3.0m × 2.7m
-  const kitW = 3000;
-  const kitH = 2700;
-  const kitX0 = ix;                     // kitchen left
-  const kitX1 = ix + kitW;              // kitchen right
-  const kitY0 = iy + ih - kitH;         // kitchen top
-  const kitY1 = iy + ih;                // kitchen bottom
-
-  const walls: PlanIR["floors"][number]["walls"] = [];
-  const openings: PlanIR["floors"][number]["openings"] = [];
-  const rooms: PlanIR["floors"][number]["rooms"] = [];
-
-  const W = (
-    id: string,
-    a: { x: number; y: number },
-    b: { x: number; y: number },
-    type: PlanIR["floors"][number]["walls"][number]["type"] = "interior_brick_115",
-  ) => walls.push({ id, start: a, end: b, type, height_mm: 3000 });
-
-  // ---------- Perimeter (clockwise) ----------
-  W("w_top",    { x: ix,      y: iy      }, { x: ix + iw, y: iy      }, "exterior_brick_230");
-  W("w_right",  { x: ix + iw, y: iy      }, { x: ix + iw, y: iy + ih }, "exterior_brick_230");
-  W("w_bottom", { x: ix + iw, y: iy + ih }, { x: ix,      y: iy + ih }, "exterior_brick_230");
-  W("w_left",   { x: ix,      y: iy + ih }, { x: ix,      y: iy      }, "exterior_brick_230");
-
-  // ---------- Internal walls ----------
-  // Horizontal divider between top (bedrooms) and bottom (living/kitchen) halves
-  W("w_mid_h", { x: ix, y: splitY }, { x: ix + iw, y: splitY });
-
-  // Bedroom verticals (top half)
-  W("w_bed_v", { x: bedSplitX, y: iy }, { x: bedSplitX, y: splitY });
-  if (isLarge) {
-    W("w_bed3_v", { x: bath1X, y: iy }, { x: bath1X, y: splitY });
-  }
-
-  // Bathroom partitions (in bottom half)
-  W("w_bath_left",   { x: bathX0, y: bathY1 }, { x: bathX0,  y: bathY0 });
-  W("w_bath_bottom", { x: bathX0, y: bathY1 }, { x: ix + iw, y: bathY1 });
-
-  // Kitchen partitions (in bottom half)
-  W("w_kit_top",   { x: kitX0, y: kitY0 }, { x: kitX1, y: kitY0 });
-  W("w_kit_right", { x: kitX1, y: kitY0 }, { x: kitX1, y: kitY1 });
-
-  // ---------- Openings ----------
-  const O = (
-    id: string,
-    wall_id: string,
-    pos: number,
-    width_mm: number,
-    height_mm: number,
-    type: PlanIR["floors"][number]["openings"][number]["type"],
-    sill_mm = 0,
-    material?: string,
-  ) => openings.push({ id, wall_id, position_along_wall: pos, width_mm, height_mm, sill_mm, type, material });
-
-  // Front door on bottom wall (south facade by default)
-  O("o_main_door", "w_bottom", 0.55, 1000, 2100, "door_single", 0, "teak");
-
-  // Bedroom windows on top wall
-  O("o_win_bed1", "w_top", 0.22, 1500, 1200, "window_casement", 900, "upvc");
-  O("o_win_bed2", "w_top", isLarge ? 0.55 : 0.75, 1500, 1200, "window_casement", 900, "upvc");
-  if (isLarge) {
-    O("o_win_bed3", "w_top", 0.82, 1200, 1200, "window_casement", 900, "upvc");
-  }
-
-  // Bedroom side windows on left/right walls
-  // Left wall covers y=iy+ih (start) → y=iy (end). Position 0.7 → y near iy + 0.3*ih (top half).
-  O("o_win_bed1_side", "w_left", 0.75, 1200, 1200, "window_sliding", 900, "upvc");
-  // Right wall covers y=iy → y=iy+ih. Position 0.2 → y near iy + 0.2*ih (top half = bedroom area).
-  O("o_win_bed2_side", "w_right", 0.18, 1200, 1200, "window_sliding", 900, "upvc");
-
-  // Bedroom doors (from corridor/living onto w_mid_h)
-  // w_mid_h is from (ix, splitY) → (ix+iw, splitY), length=iw.
-  // Bedroom 1 spans x=ix to bedSplitX, midpoint at (bedSplitX-ix)/2 + ix.
-  const bed1Center = (ix + bedSplitX) / 2;
-  const bed1Pos = (bed1Center - ix) / iw;
-  O("o_bed1_door", "w_mid_h", bed1Pos, 900, 2100, "door_single", 0);
-
-  if (isLarge) {
-    const bed2Center = (bedSplitX + bath1X) / 2;
-    const bed2Pos = (bed2Center - ix) / iw;
-    O("o_bed2_door", "w_mid_h", bed2Pos, 900, 2100, "door_single", 0);
-    const bed3Center = (bath1X + ix + iw) / 2;
-    const bed3Pos = (bed3Center - ix) / iw;
-    // Make sure bed3 door doesn't collide with bath area (bath spans bathX0..ix+iw)
-    O("o_bed3_door", "w_mid_h", Math.min(bed3Pos, (bathX0 - 600 - ix) / iw), 900, 2100, "door_single", 0);
-  } else {
-    const bed2Center = (bedSplitX + ix + iw) / 2;
-    let bed2Pos = (bed2Center - ix) / iw;
-    // Avoid the bathroom range on w_mid_h
-    const maxPos = (bathX0 - 600 - ix) / iw;
-    if (bed2Pos > maxPos) bed2Pos = maxPos;
-    O("o_bed2_door", "w_mid_h", bed2Pos, 900, 2100, "door_single", 0);
-  }
-
-  // Bathroom door (on bathroom's left wall = w_bath_left)
-  O("o_bath_door", "w_bath_left", 0.5, 750, 2100, "door_single", 0);
-  // Bathroom ventilator on the outer right wall, aligned with bathroom interior
-  // Bathroom y range: bathY0..bathY1. w_right covers iy..iy+ih, length ih.
-  const bathCenterY = (bathY0 + bathY1) / 2;
-  const ventPos = (bathCenterY - iy) / ih;
-  O("o_bath_vent", "w_right", ventPos, 600, 600, "ventilator", 1800);
-
-  // Kitchen door (sliding) on w_kit_right
-  O("o_kit_door", "w_kit_right", 0.4, 900, 2100, "door_sliding", 0, "aluminum");
-  // Kitchen window on outer left wall (w_left covers y=iy+ih→iy, length ih)
-  // Kitchen y range = kitY0..kitY1. Position from start (y=iy+ih): (iy+ih - centerY)/ih
-  const kitCenterY = (kitY0 + kitY1) / 2;
-  const kitWinPos = (iy + ih - kitCenterY) / ih;
-  O("o_kit_win", "w_left", kitWinPos, 1200, 1200, "window_casement", 900, "upvc");
-
-  // ---------- Rooms ----------
-  // Bedroom 1 (top-left)
-  rooms.push({
-    id: "r_bed1",
-    name: "Master Bedroom",
-    type: "master_bedroom",
-    polygon: [
-      { x: ix,        y: iy     },
-      { x: bedSplitX, y: iy     },
-      { x: bedSplitX, y: splitY },
-      { x: ix,        y: splitY },
-    ],
-    finishes: { floor: "vitrified_tile_600x600_sqm", wall_finish: "putty_emulsion_sqm", ceiling: "pop_false_ceiling_sqm" },
-    fixtures: [
-      { type: "bed_king",  position: { x: (ix + bedSplitX) / 2,  y: (iy + splitY) / 2 - 100 }, rotation_deg: 0 },
-      { type: "wardrobe",  position: { x: ix + 400,              y: splitY - 500             }, rotation_deg: 0 },
-    ],
-  });
-
-  if (isLarge) {
-    rooms.push({
-      id: "r_bed2",
-      name: "Bedroom 2",
-      type: "bedroom",
-      polygon: [
-        { x: bedSplitX, y: iy     },
-        { x: bath1X,    y: iy     },
-        { x: bath1X,    y: splitY },
-        { x: bedSplitX, y: splitY },
-      ],
-      finishes: { floor: "vitrified_tile_600x600_sqm", wall_finish: "putty_emulsion_sqm", ceiling: "pop_false_ceiling_sqm" },
-      fixtures: [
-        { type: "bed_double", position: { x: (bedSplitX + bath1X) / 2, y: (iy + splitY) / 2 - 100 }, rotation_deg: 0 },
-      ],
-    });
-    rooms.push({
-      id: "r_bed3",
-      name: "Bedroom 3",
-      type: "kids_bedroom",
-      polygon: [
-        { x: bath1X,  y: iy     },
-        { x: ix + iw, y: iy     },
-        { x: ix + iw, y: splitY },
-        { x: bath1X,  y: splitY },
-      ],
-      finishes: { floor: "vitrified_tile_600x600_sqm", wall_finish: "putty_emulsion_sqm", ceiling: "pop_false_ceiling_sqm" },
-      fixtures: [
-        { type: "bed_single",  position: { x: (bath1X + ix + iw) / 2, y: (iy + splitY) / 2 - 100 }, rotation_deg: 0 },
-        { type: "study_table", position: { x: ix + iw - 500,           y: iy + 500                }, rotation_deg: 0 },
-      ],
-    });
-  } else {
-    rooms.push({
-      id: "r_bed2",
-      name: "Bedroom 2",
-      type: "bedroom",
-      polygon: [
-        { x: bedSplitX, y: iy     },
-        { x: ix + iw,   y: iy     },
-        { x: ix + iw,   y: splitY },
-        { x: bedSplitX, y: splitY },
-      ],
-      finishes: { floor: "vitrified_tile_600x600_sqm", wall_finish: "putty_emulsion_sqm", ceiling: "pop_false_ceiling_sqm" },
-      fixtures: [
-        { type: "bed_double", position: { x: (bedSplitX + ix + iw) / 2, y: (iy + splitY) / 2 - 100 }, rotation_deg: 0 },
-        { type: "wardrobe",   position: { x: ix + iw - 400,             y: splitY - 500             }, rotation_deg: 0 },
-      ],
-    });
-  }
-
-  // Bathroom (top-right of bottom half)
-  rooms.push({
-    id: "r_bath",
-    name: "Bathroom",
-    type: "bathroom",
-    polygon: [
-      { x: bathX0,  y: bathY0 },
-      { x: ix + iw, y: bathY0 },
-      { x: ix + iw, y: bathY1 },
-      { x: bathX0,  y: bathY1 },
-    ],
-    finishes: { floor: "ceramic_tile_300x600_sqm", wall_finish: "ceramic_tile_300x600_sqm", ceiling: "gypsum_false_ceiling_sqm" },
-    fixtures: [
-      { type: "wc",        position: { x: bathX0 + 400,         y: bathY1 - 400 }, rotation_deg: 0 },
-      { type: "washbasin", position: { x: bathX0 + bathW - 400, y: bathY0 + 400 }, rotation_deg: 0 },
-      { type: "shower",    position: { x: bathX0 + bathW - 500, y: bathY1 - 500 }, rotation_deg: 0 },
-    ],
-  });
-
-  // Kitchen (bottom-left of bottom half)
-  rooms.push({
-    id: "r_kit",
-    name: "Kitchen",
-    type: "kitchen",
-    polygon: [
-      { x: kitX0, y: kitY0 },
-      { x: kitX1, y: kitY0 },
-      { x: kitX1, y: kitY1 },
-      { x: kitX0, y: kitY1 },
-    ],
-    finishes: { floor: "vitrified_tile_600x600_sqm", wall_finish: "ceramic_tile_300x600_sqm", ceiling: "pop_false_ceiling_sqm" },
-    fixtures: [
-      { type: "kitchen_sink",   position: { x: kitX0 + 600,        y: kitY0 + 400  }, rotation_deg: 0 },
-      { type: "stove_platform", position: { x: kitX1 - 800,        y: kitY0 + 400  }, rotation_deg: 0 },
-      { type: "fridge",         position: { x: kitX1 - 400,        y: kitY1 - 400  }, rotation_deg: 0 },
-    ],
-  });
-
-  // Living / Dining — L-shape that wraps around bathroom and kitchen
-  // Polygon clockwise:
-  //   (ix, splitY) → (bathX0, splitY) → (bathX0, bathY1) → (ix+iw, bathY1)
-  //   → (ix+iw, iy+ih) → (kitX1, iy+ih) → (kitX1, kitY0) → (ix, kitY0) → close
-  rooms.push({
-    id: "r_living",
-    name: "Living / Dining",
-    type: "living",
-    polygon: [
-      { x: ix,      y: splitY  },
-      { x: bathX0,  y: splitY  },
-      { x: bathX0,  y: bathY1  },
-      { x: ix + iw, y: bathY1  },
-      { x: ix + iw, y: iy + ih },
-      { x: kitX1,   y: iy + ih },
-      { x: kitX1,   y: kitY0   },
-      { x: ix,      y: kitY0   },
-    ],
-    finishes: { floor: "vitrified_tile_600x600_sqm", wall_finish: "putty_emulsion_sqm", ceiling: "pop_false_ceiling_sqm" },
-    fixtures: [
-      { type: "sofa_3",         position: { x: ix + 1500,            y: splitY + 800             }, rotation_deg: 0 },
-      { type: "tv_unit",        position: { x: ix + iw - 800,        y: splitY + 600             }, rotation_deg: 0 },
-      { type: "dining_table_4", position: { x: kitX1 + 1500,         y: iy + ih - 1100           }, rotation_deg: 0 },
-    ],
-  });
+  void facing; // PlanSpec doesn't carry facing; the editor's project meta handles it
 
   return {
-    schema_version: "1.0.0",
-    meta: args.meta,
-    floors: [
-      {
-        level: 0,
-        name: "Ground Floor",
-        height_mm: 3000,
-        walls,
-        openings,
-        rooms,
-      },
-    ],
-    notes: "Generated in demo mode (no LLM API key configured).",
+    prompt: p,
+    plot,
+    rooms,
+    budget,
   };
 }
+
+/** Back-compat shim: older code path imports `buildDemoPlan` and expects a full PlanIR. */
+export { buildDemoSpec as buildDemoPlan };
+
+// ────────── Parsing helpers ──────────
+
+type BhkKind = "studio" | "1bhk" | "2bhk" | "3bhk" | "4bhk" | "5bhk";
+
+function parseBhk(p: string): BhkKind {
+  const s = p.toLowerCase();
+  if (/\bstudio\b/.test(s)) return "studio";
+  const m = s.match(/(\d+)\s*[- ]?\s*bhk/);
+  if (m) {
+    const n = parseInt(m[1]!, 10);
+    if (n <= 1) return "1bhk";
+    if (n === 2) return "2bhk";
+    if (n === 3) return "3bhk";
+    if (n === 4) return "4bhk";
+    if (n >= 5) return "5bhk";
+  }
+  if (/\bone\s*bedroom\b|\b1\s*bedroom\b/.test(s)) return "1bhk";
+  if (/\btwo\s*bedroom\b|\b2\s*bedroom\b/.test(s)) return "2bhk";
+  if (/\bthree\s*bedroom\b|\b3\s*bedroom\b/.test(s)) return "3bhk";
+  if (/\bfour\s*bedroom\b|\b4\s*bedroom\b/.test(s)) return "4bhk";
+  if (/\bvilla\b|\bbungalow\b/.test(s)) return "4bhk";
+  return "2bhk";
+}
+
+function parsePlot(p: string, bhk: BhkKind): { w: number; h: number } {
+  const s = p.toLowerCase().replace(/\s+/g, " ");
+
+  // "8x11m", "8 x 11m", "8 × 11 m", "8 by 11 meters"
+  const mxm = s.match(/(\d+(?:\.\d+)?)\s*(?:x|×|by)\s*(\d+(?:\.\d+)?)\s*(m|meter|metre|meters|metres)\b/);
+  if (mxm) {
+    const w = Math.round(parseFloat(mxm[1]!) * 1000);
+    const h = Math.round(parseFloat(mxm[2]!) * 1000);
+    return clampPlot(w, h);
+  }
+
+  // "30x40 ft", "30 x 40 feet", "30 × 40'"
+  const mxf = s.match(/(\d+(?:\.\d+)?)\s*(?:x|×|by)\s*(\d+(?:\.\d+)?)\s*(ft|feet|foot|')\b/);
+  if (mxf) {
+    const w = Math.round(parseFloat(mxf[1]!) * 304.8);
+    const h = Math.round(parseFloat(mxf[2]!) * 304.8);
+    return clampPlot(w, h);
+  }
+
+  // "8x11" (no unit) — assume meters when both numbers ≤ 30, else feet
+  const mxn = s.match(/(\d+(?:\.\d+)?)\s*(?:x|×|by)\s*(\d+(?:\.\d+)?)/);
+  if (mxn) {
+    const a = parseFloat(mxn[1]!);
+    const b = parseFloat(mxn[2]!);
+    if (a <= 30 && b <= 30) {
+      return clampPlot(Math.round(a * 1000), Math.round(b * 1000));
+    }
+    return clampPlot(Math.round(a * 304.8), Math.round(b * 304.8));
+  }
+
+  // "1200 sqft", "1500 sft", "1200 square feet"
+  const sqft = s.match(/(\d{3,5})\s*(?:sqft|sft|sq\.?\s*ft|square\s*feet|s\.f\.)/);
+  if (sqft) {
+    const totalSqm = parseFloat(sqft[1]!) * 0.0929;
+    return plotFromArea(totalSqm);
+  }
+
+  // "120 sqm", "150 m²"
+  const sqm = s.match(/(\d{2,4})\s*(?:sqm|sq\.?\s*m|m²|square\s*me?tre?s)/);
+  if (sqm) return plotFromArea(parseFloat(sqm[1]!));
+
+  // Fallback by BHK
+  const defaults: Record<BhkKind, [number, number]> = {
+    studio: [6000, 8000],
+    "1bhk": [7500, 9000],
+    "2bhk": [8460, 11460],
+    "3bhk": [10000, 12000],
+    "4bhk": [12000, 14000],
+    "5bhk": [14000, 16000],
+  };
+  const [w, h] = defaults[bhk];
+  return { w, h };
+}
+
+function plotFromArea(sqm: number): { w: number; h: number } {
+  // Assume 2:3 aspect (typical Indian residential plot)
+  const longSide = Math.sqrt((sqm * 1.5) / 1) * 1000;
+  const shortSide = (sqm * 1e6) / longSide;
+  return clampPlot(Math.round(shortSide), Math.round(longSide));
+}
+
+function clampPlot(w: number, h: number): { w: number; h: number } {
+  return {
+    w: Math.max(4000, Math.min(60000, w)),
+    h: Math.max(4000, Math.min(60000, h)),
+  };
+}
+
+function parseFacing(p: string): "N" | "S" | "E" | "W" | "NE" | "NW" | "SE" | "SW" {
+  const s = p.toLowerCase();
+  if (/\bnorth.?east\b|\bne(\s|-)?facing\b/.test(s)) return "NE";
+  if (/\bnorth.?west\b|\bnw(\s|-)?facing\b/.test(s)) return "NW";
+  if (/\bsouth.?east\b|\bse(\s|-)?facing\b/.test(s)) return "SE";
+  if (/\bsouth.?west\b|\bsw(\s|-)?facing\b/.test(s)) return "SW";
+  if (/\bnorth\b/.test(s)) return "N";
+  if (/\bsouth\b/.test(s)) return "S";
+  if (/\beast\b/.test(s)) return "E";
+  if (/\bwest\b/.test(s)) return "W";
+  return "N";
+}
+
+function parseBudget(p: string): number | undefined {
+  const s = p.toLowerCase();
+
+  // "₹24L", "rs 24L", "24l budget", "24 lakh", "24 lakhs"
+  const lakh = s.match(/(?:₹|rs\.?\s*|inr\s*)?\s*(\d+(?:\.\d+)?)\s*(?:l\b|lakh|lakhs|lac|lacs)/);
+  if (lakh) return Math.round(parseFloat(lakh[1]!) * 100000);
+
+  // "₹2.5cr", "2.5 crore"
+  const cr = s.match(/(?:₹|rs\.?\s*|inr\s*)?\s*(\d+(?:\.\d+)?)\s*(?:cr|crore|crores)/);
+  if (cr) return Math.round(parseFloat(cr[1]!) * 1e7);
+
+  // "₹2,40,000"
+  const inr = s.match(/(?:₹|rs\.?\s*|inr\s*)([\d,]+)/);
+  if (inr) {
+    const v = parseInt(inr[1]!.replace(/,/g, ""), 10);
+    if (v >= 100000) return v;
+  }
+  return undefined;
+}
+
+function parseQualifier(p: string): number {
+  const s = p.toLowerCase();
+  if (/\b(luxury|spacious|premium|large)\b/.test(s)) return 1.2;
+  if (/\b(compact|small|tight|economy|economical)\b/.test(s)) return 0.85;
+  return 1;
+}
+
+type ExtraRoom = { name: string; area: number; zone: Zone };
+function parseSpecialRooms(p: string): ExtraRoom[] {
+  const s = p.toLowerCase();
+  const out: ExtraRoom[] = [];
+  if (/\b(puja|pooja|prayer|mandir)\b/.test(s)) out.push({ name: "Puja Room", area: 4, zone: "private" });
+  if (/\bstudy\b/.test(s)) out.push({ name: "Study", area: 8, zone: "private" });
+  if (/\bstore\b/.test(s)) out.push({ name: "Store", area: 5, zone: "service" });
+  if (/\bservant\s*room\b|\bservant\s*qtrs?\b/.test(s)) out.push({ name: "Servant Quarters", area: 9, zone: "service" });
+  if (/\bgarage\b|\bcar\s*park\b/.test(s)) out.push({ name: "Garage", area: 16, zone: "service" });
+  if (/\bhome\s*office\b|\bworkspace\b/.test(s)) out.push({ name: "Home Office", area: 9, zone: "private" });
+  if (/\bguest\s*room\b/.test(s)) out.push({ name: "Guest Bedroom", area: 11, zone: "private" });
+  // Don't add balcony from generic mention (most of our presets already include one)
+  return out;
+}
+
+// ────────── Composition ──────────
+
+function composeRooms(bhk: BhkKind, q: number, extras: ExtraRoom[]): PlanSpec["rooms"] {
+  const scale = (n: number) => Math.round(n * q * 10) / 10;
+  const rooms: PlanSpec["rooms"] = [];
+
+  const livingArea = bhk === "studio" ? 18 : bhk === "1bhk" ? 18 : bhk === "2bhk" ? 22 : bhk === "3bhk" ? 26 : bhk === "4bhk" ? 30 : 34;
+  const kitchenArea = bhk === "studio" ? 6 : bhk === "1bhk" ? 8 : bhk === "2bhk" ? 9 : bhk === "3bhk" ? 10 : 11;
+  const utilityArea = bhk === "studio" || bhk === "1bhk" ? 0 : bhk === "2bhk" ? 5 : 6.5;
+  const bathBig = 4.5;
+  const bathSmall = 3.5;
+
+  rooms.push({ id: "living", name: bhk === "studio" ? "Studio" : "Living / Dining", area: scale(livingArea), zone: "public", entry: true });
+  if (bhk !== "studio") {
+    rooms.push({ id: "kitchen", name: "Kitchen", area: scale(kitchenArea), zone: "public" });
+  } else {
+    // Studio: tiny kitchenette merged into the studio area
+    rooms.push({ id: "kitchenette", name: "Kitchenette", area: scale(5), zone: "service" });
+  }
+  if (utilityArea > 0) rooms.push({ id: "utility", name: "Utility", area: scale(utilityArea), zone: "service" });
+
+  // Bedrooms
+  const beds: { count: number; bath: number } = {
+    studio: { count: 0, bath: 1 },
+    "1bhk": { count: 1, bath: 1 },
+    "2bhk": { count: 2, bath: 2 },
+    "3bhk": { count: 3, bath: 2 },
+    "4bhk": { count: 4, bath: 3 },
+    "5bhk": { count: 5, bath: 3 },
+  }[bhk];
+
+  if (beds.count >= 1) {
+    rooms.push({ id: "mbr", name: "Master Bedroom", area: scale(14), zone: "private" });
+    rooms.push({ id: "mbath", name: "Master Bath", area: scale(bathBig), zone: "private" });
+  }
+  for (let i = 2; i <= beds.count; i++) {
+    rooms.push({ id: `br${i}`, name: `Bedroom ${i}`, area: scale(11 - (i - 2)), zone: "private" });
+  }
+  // Common bath
+  if (beds.bath >= 2) {
+    rooms.push({ id: "bath", name: "Common Bath", area: scale(bathSmall), zone: "private" });
+  } else if (beds.count === 1) {
+    // 1BHK already has master bath; nothing else
+  } else if (beds.count === 0) {
+    rooms.push({ id: "bath", name: "Bath", area: scale(bathSmall), zone: "private" });
+  }
+  if (beds.bath >= 3) {
+    rooms.push({ id: "bath3", name: "Powder Room", area: scale(2.5), zone: "private" });
+  }
+
+  // Balcony for everything but studio
+  if (bhk !== "studio") {
+    rooms.push({ id: "balcony", name: "Balcony", area: scale(5), zone: "private" });
+  }
+
+  // Apply extras (deduplicate by id-friendly version of name)
+  for (const e of extras) {
+    const id = `x_${e.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+    if (!rooms.find((r) => r.id === id || r.name.toLowerCase() === e.name.toLowerCase())) {
+      rooms.push({ id, name: e.name, area: scale(e.area), zone: e.zone });
+    }
+  }
+
+  return rooms;
+}
+
+// Re-export the seed for any place that needs a deterministic baseline.
+export { SEED_SPEC };

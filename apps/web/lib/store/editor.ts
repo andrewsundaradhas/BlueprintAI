@@ -15,7 +15,7 @@ export type Tool =
   | "fixture"
   | "dimension";
 
-export type ViewMode = "2D" | "3D";
+export type ViewMode = "2D" | "3D" | "Split";
 export type Status = { kind: "ok" | "gen" | "err"; text: string };
 
 export type FloorState = {
@@ -36,6 +36,8 @@ export type EditorStore = {
   addFloor: () => void;
   renameFloor: (id: string, name: string) => void;
   deleteFloor: (id: string) => void;
+  /** Replace the entire floor set (used when hydrating from localStorage). */
+  hydrateFloors: (floors: { id: string; num: string; name: string; spec: PlanSpec }[], activeFloorId: string) => void;
 
   // Spec mutations
   setActiveFloorPlan: (next: { spec: PlanSpec; plan: SolvedPlan; planIR: PlanIR; boq?: BoqResult | null }) => void;
@@ -102,6 +104,13 @@ export type EditorStore = {
   // Cmd palette
   cmdOpen: boolean;
   setCmdOpen: (b: boolean) => void;
+
+  /**
+   * True once the user has generated (or hydrated) at least one plan.
+   * Editor page uses this to decide whether to show the first-prompt hero.
+   */
+  hasGenerated: boolean;
+  setHasGenerated: (b: boolean) => void;
 };
 
 const DEFAULT_LAYERS = [
@@ -147,6 +156,24 @@ export const useEditor = create<EditorStore>((set, get) => ({
   renameFloor: (id, name) =>
     set((s) => ({ floors: s.floors.map((f) => (f.id === id ? { ...f, name } : f)) })),
 
+  hydrateFloors: (saved, activeFloorId) => {
+    const floors: FloorState[] = saved.map((f) => {
+      const plan = solveLayout(f.spec);
+      const planIR = solvedPlanToPlanIR({ spec: f.spec, plan });
+      return { id: f.id, num: f.num, name: f.name, spec: f.spec, plan, planIR, boq: null };
+    });
+    if (!floors.length) return;
+    const active = floors.some((f) => f.id === activeFloorId) ? activeFloorId : floors[0]!.id;
+    set({
+      floors,
+      activeFloorId: active,
+      selectedRoomId: null,
+      hasGenerated: true,
+      history: [{ floors: JSON.parse(JSON.stringify(floors)) as FloorState[], activeFloorId: active }],
+      hIdx: 0,
+    });
+  },
+
   deleteFloor: (id) => {
     const { floors, activeFloorId } = get();
     if (floors.length <= 1) return;
@@ -167,6 +194,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
           : f,
       ),
       selectedRoomId: null,
+      hasGenerated: true,
     }));
     get().pushHistory();
   },
@@ -184,7 +212,7 @@ export const useEditor = create<EditorStore>((set, get) => ({
       planIR: next.planIR,
       boq: next.boq ?? null,
     };
-    set({ floors: [...floors, newFloor], activeFloorId: id, selectedRoomId: null });
+    set({ floors: [...floors, newFloor], activeFloorId: id, selectedRoomId: null, hasGenerated: true });
     get().pushHistory();
   },
 
@@ -321,6 +349,9 @@ export const useEditor = create<EditorStore>((set, get) => ({
 
   cmdOpen: false,
   setCmdOpen: (b) => set({ cmdOpen: b }),
+
+  hasGenerated: false,
+  setHasGenerated: (b) => set({ hasGenerated: b }),
 }));
 
 export const selectActiveFloor = (s: EditorStore): FloorState =>
