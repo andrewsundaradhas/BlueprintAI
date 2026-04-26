@@ -9,6 +9,7 @@ import { RightPanel } from "@/components/editor/RightPanel";
 import { Dock } from "@/components/editor/Dock";
 import { LoadingWireframe } from "@/components/editor/LoadingWireframe";
 import { HeroPrompt } from "@/components/editor/HeroPrompt";
+import { OnboardingHint } from "@/components/editor/OnboardingHint";
 import { useEditor, selectActiveFloor } from "@/lib/store/editor";
 import { Plus, Minus } from "@/components/icons";
 import { useToast } from "@/components/ui/toast";
@@ -255,6 +256,7 @@ export default function EditorPage() {
             </div>
           )}
           {!loading && !hasGenerated && <HeroPrompt />}
+          {!loading && hasGenerated && <OnboardingHint />}
           {loading && <LoadingWireframe phase={loadPhase} />}
 
           {!loading && hasGenerated && (
