@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/apps/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    labels: ["deps", "security"]
+    groups:
+      next:
+        patterns: ["next", "eslint-config-next"]
+      three:
+        patterns: ["three", "@react-three/*", "three-stdlib"]
+      radix:
+        patterns: ["@radix-ui/*"]
+      tooling:
+        patterns: ["typescript", "vitest", "@vitest/*", "@playwright/*", "@types/*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["ci", "security"]

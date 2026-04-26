@@ -11,10 +11,18 @@ out/
 build/
 dist/
 
-# Env files
+# Env files (every depth, every variant — never commit secrets)
 .env
 .env.local
 .env.*.local
+**/.env
+**/.env.local
+**/.env.*.local
+**/.env.development.local
+**/.env.production.local
+
+# Design fetch artifacts — local-only
+.design-fetch/
 
 # Logs
 *.log

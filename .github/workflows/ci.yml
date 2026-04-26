@@ -13,8 +13,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
+        with: { version: 10 }
 
       - uses: actions/setup-node@v4
         with:
@@ -29,3 +28,28 @@ jobs:
 
       - name: Unit tests
         run: pnpm --filter @blueprintai/web test
+
+      - name: Production build
+        run: pnpm --filter @blueprintai/web build
+        env:
+          NODE_ENV: production
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Fail on high/critical advisories — adjust threshold per your tolerance.
+      - name: pnpm audit
+        run: pnpm audit --audit-level high
