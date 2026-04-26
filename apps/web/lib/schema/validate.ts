@@ -1,6 +1,5 @@
 import {
   type Floor,
-  type Opening,
   type PlanIR,
   type Point,
   type Wall,

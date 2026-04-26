@@ -195,12 +195,17 @@ export const useEditor = create<EditorStore>((set, get) => ({
       ),
       selectedRoomId: null,
       hasGenerated: true,
+      // First generation lands the user in Split view so 2D + 3D show together
+      view: !s.hasGenerated && s.view === "2D" ? "Split" : s.view,
+      // Auto-fit on every plan change
+      zoom: 1,
+      pan: { x: 0, y: 0 },
     }));
     get().pushHistory();
   },
 
   appendNewFloor: (next) => {
-    const { floors } = get();
+    const { floors, view, hasGenerated } = get();
     const num = String(floors.length).padStart(2, "0");
     const id = `f${Date.now()}`;
     const newFloor: FloorState = {
@@ -212,7 +217,15 @@ export const useEditor = create<EditorStore>((set, get) => ({
       planIR: next.planIR,
       boq: next.boq ?? null,
     };
-    set({ floors: [...floors, newFloor], activeFloorId: id, selectedRoomId: null, hasGenerated: true });
+    set({
+      floors: [...floors, newFloor],
+      activeFloorId: id,
+      selectedRoomId: null,
+      hasGenerated: true,
+      view: !hasGenerated && view === "2D" ? "Split" : view,
+      zoom: 1,
+      pan: { x: 0, y: 0 },
+    });
     get().pushHistory();
   },
 

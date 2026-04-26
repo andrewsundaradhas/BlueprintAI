@@ -63,14 +63,9 @@ export function solvedPlanToPlanIR(args: {
     let wall_id: string;
     let positionAlongWall = 0.5;
     let widthMm = o.dir === "h" ? o.w : o.h;
-    let heightMm = o.type === "door" ? 2100 : 1200;
-    let sillMm = o.type === "door" ? 0 : 900;
-    let openingType: Opening["type"];
-    if (o.type === "door") {
-      openingType = o.id === "entry" ? "door_single" : "door_single";
-    } else {
-      openingType = "window_casement";
-    }
+    const heightMm = o.type === "door" ? 2100 : 1200;
+    const sillMm = o.type === "door" ? 0 : 900;
+    const openingType: Opening["type"] = o.type === "door" ? "door_single" : "window_casement";
 
     if (o.id === "entry") {
       wall_id = "w_left";
