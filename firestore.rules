@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users may only read/write their own profile and projects.
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+    match /projects/{projectId} {
+      allow read, write: if request.auth != null
+        && resource.data.owner_uid == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.owner_uid == request.auth.uid;
+      match /versions/{vid} {
+        allow read, write: if request.auth != null
+          && get(/databases/$(database)/documents/projects/$(projectId)).data.owner_uid == request.auth.uid;
+      }
+    }
+    // Pricing data: global read for signed-in users, write only for admins.
+    match /pricing/{regionKey}/items/{itemKey} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.auth.token.admin == true;
+    }
+    match /furniture/{key} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.auth.token.admin == true;
+    }
+  }
+}
