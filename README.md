@@ -54,53 +54,5 @@ apps/web/
    └─ firebase/                 # localStorage project store (Firebase optional)
 ```
 
-### The two data shapes
-
-- **`PlanSpec`** — what the LLM returns: `{ plot, rooms[{id,name,area,zone,entry?}], budget? }`
-- **`SolvedPlan`** — what the solver produces: same rooms with `x,y,w,h,actualArea` + auto-detected openings
-- **`PlanIR`** — canonical schema (walls, openings, polygons, finishes, fixtures) — drives the BOQ engine
-
-The pipeline: `prompt → PlanSpec (LLM) → SolvedPlan (solver) → PlanIR (adapter) → BoqResult (engine)`
-
-### Design system
-
-Tokens live in [`apps/web/app/globals.css`](apps/web/app/globals.css) and
-[`apps/web/tailwind.config.ts`](apps/web/tailwind.config.ts). They follow the
-"precise / technical / calm" specification: one accent (`#2D7FF9`), 4px default
-radius, 13/14px UI sizing, hairline borders, no purple.
-
-Fonts: **Inter** (body), **JetBrains Mono** (numerics + shortcuts), **Fraunces**
-(display headlines + room labels) — loaded via `next/font/google`.
-
-## Testing
-
-```bash
-pnpm --filter @blueprintai/web test       # vitest unit suite (36 tests)
-pnpm --filter @blueprintai/web typecheck
-pnpm --filter @blueprintai/web test:e2e   # Playwright (config only)
-```
-
-## BOQ rates
-
-Seed rates for `south_metro_tier1` are in [`lib/boq/seed-rates.ts`](apps/web/lib/boq/seed-rates.ts).
-**These are illustrative starting points** — verify against current market quotations
-before relying on them in production. Each `BoqResult` snapshots the rates it used
-so historical estimates stay reproducible.
-
-## Persistence
-
-Without Firebase configured, projects are saved to `localStorage` per-browser.
-Add the Firebase env vars in `.env.example` to enable cross-device sync (the
-Firestore-backed implementation lives in `lib/firebase/projects.ts` as a TODO).
-
-## Deployment
-
-- **Web:** Vercel (`pnpm build && next start`)
-- **Backend services:** Firebase (Auth + Firestore + Storage)
-- **Payments:** Razorpay subscriptions
-
-See `firestore.rules` for the security model.
-
-## License
 
 MIT.
